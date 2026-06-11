@@ -184,10 +184,10 @@ if dane_api and "matches" in dane_api:
                     col1, col2, col3 = st.columns([1, 1, 2])
                     with col1:
                         typ_gosp = st.number_input(f"Gole: {gospodarz}", min_value=0, max_value=20, step=1,
-                                                   value=stary_gosp, key=f"gosp_{mecz['id']}")
+                                                   value=stary_gosp, key=f"gosp_{mecz['id']}_{uzytkownik}")
                     with col2:
                         typ_gosc = st.number_input(f"Gole: {gosc}", min_value=0, max_value=20, step=1, value=stary_gosc,
-                                                   key=f"gosc_{mecz['id']}")
+                                                   key=f"gosc_{mecz['id']}_{uzytkownik}")
 
                     # Zapisujemy typy do naszego słownika w pamięci
                     zebrane_typy[mecz['id']] = {
