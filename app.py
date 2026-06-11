@@ -90,6 +90,20 @@ def pobierz_mecze(data_od, data_do):
         return None
 
 
+@st.cache_data(ttl=3600)
+def pobierz_wszystkie_mecze():
+    url = "https://api.football-data.org/v4/competitions/WC/matches"
+    headers = {"X-Auth-Token": API_KEY}
+
+    # Brak parametru daty = API zwraca wszystkie mecze od początku do końca Mundialu
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 200:
+        return response.json()
+    else:
+        return None
+
+
 # --- 4. FUNKCJE POMOCNICZE (CZAS I FLAGI) ---
 def konwertuj_na_czas_polski(data_utc_string):
     """Zmienia np. '2026-06-11T19:00:00Z' na polską godzinę np. '21:00'"""
@@ -283,25 +297,29 @@ with st.spinner("Przeliczam punkty..."):
         # Odczytujemy aktualną bazę typów
         baza_typow = conn.read(ttl=0)
 
+        # NOWOŚĆ: Pobieramy historię całego turnieju, żeby nie gubić starych meczów
+        dane_caly_turniej = pobierz_wszystkie_mecze()
+
         if not baza_typow.empty:
             punkty_graczy = {}
 
-            # Przechodzimy przez każdy typ w Arkuszu Google
             for index, wiersz in baza_typow.iterrows():
                 gracz = wiersz["Uzytkownik"]
                 mecz_nazwa = wiersz["Mecz"]
 
-                # Zabezpieczenie, by traktować wpisane typy jako liczby całkowite
+                # Ignorujemy typy długoterminowe w tym rankingu
+                if mecz_nazwa in ["🏆 ZWYCIĘZCA MUNDIALU", "⚽ KRÓL STRZELCÓW"]:
+                    continue
+
                 typ_gosp = int(wiersz["Typ_Gospodarz"])
                 typ_gosc = int(wiersz["Typ_Gosc"])
 
-                # Jeśli gracza nie ma jeszcze w słowniku, dodajemy go z 0 pkt
                 if gracz not in punkty_graczy:
                     punkty_graczy[gracz] = 0
 
-                # Szukamy tego konkretnego meczu w pobranych dzisiaj danych z API
-                if dane_api and "matches" in dane_api:
-                    for mecz in dane_api["matches"]:
+                # Sprawdzamy wyniki na podstawie CAŁEGO turnieju
+                if dane_caly_turniej and "matches" in dane_caly_turniej:
+                    for mecz in dane_caly_turniej["matches"]:
                         gospodarz = mecz["homeTeam"]["name"] if mecz["homeTeam"]["name"] else "Nieznany"
                         gosc = mecz["awayTeam"]["name"] if mecz["awayTeam"]["name"] else "Nieznany"
                         mecz_api_nazwa = f"{gospodarz} vs {gosc}"
@@ -311,40 +329,22 @@ with st.spinner("Przeliczam punkty..."):
                             wynik_gosp = mecz["score"]["fullTime"]["home"]
                             wynik_gosc = mecz["score"]["fullTime"]["away"]
 
-                            # Jeśli mecz ma już wynik (czyli trwa lub się skończył)
+                            # Jeśli mecz ma już wynik
                             if wynik_gosp is not None and wynik_gosc is not None:
-                                # LOGIKA PUNKTACJI
-
-                                # 1. Dokładny wynik (3 punkty)
                                 if typ_gosp == wynik_gosp and typ_gosc == wynik_gosc:
                                     punkty_graczy[gracz] += 3
-
-                                # 2. Poprawne rozstrzygnięcie (1 punkt)
                                 else:
                                     roznica_typ = typ_gosp - typ_gosc
                                     roznica_wynik = wynik_gosp - wynik_gosc
 
-                                    # Gospodarz wygrał w obu przypadkach (różnica na plus)
-                                    if (roznica_typ > 0 and roznica_wynik > 0):
-                                        punkty_graczy[gracz] += 1
-                                    # Gość wygrał w obu przypadkach (różnica na minus)
-                                    elif (roznica_typ < 0 and roznica_wynik < 0):
-                                        punkty_graczy[gracz] += 1
-                                    # Remis w obu przypadkach (różnica równa 0)
-                                    elif (roznica_typ == 0 and roznica_wynik == 0):
+                                    if (roznica_typ > 0 and roznica_wynik > 0) or \
+                                            (roznica_typ < 0 and roznica_wynik < 0) or \
+                                            (roznica_typ == 0 and roznica_wynik == 0):
                                         punkty_graczy[gracz] += 1
 
-            # --- Tworzenie ładnej tabeli wyświetlającej ranking ---
-            # Zmieniamy nasz słownik na tabelę Pandas
             ranking_df = pd.DataFrame(list(punkty_graczy.items()), columns=["Gracz", "Punkty"])
-
-            # Sortujemy malejąco od najlepszego gracza
             ranking_df = ranking_df.sort_values(by="Punkty", ascending=False).reset_index(drop=True)
-
-            # Ustawiamy numery miejsc od 1, 2, 3...
             ranking_df.index = ranking_df.index + 1
-
-            # Wyświetlamy jako ładną, rozciągniętą tabelę
             st.table(ranking_df)
 
         else:
