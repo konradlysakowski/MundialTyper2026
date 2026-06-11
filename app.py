@@ -120,13 +120,39 @@ if dane_api and "matches" in dane_api:
     if len(mecze) == 0:
         st.info("Brak zaplanowanych meczów Mistrzostw Świata na ten dzień.")
     else:
-        # Otwieramy formularz
+        st.markdown("### ✍️ Panel Typera")
+
+        # 1. WYCIĄGAMY WYBÓR GRACZA NAD FORMULARZ
+        uzytkownik = st.selectbox("Kto typuje?", ["Wybierz gracza...", "Konrad", "Marcel", "Natalka"])
+
+        # 2. POBIERAMY DOTYCHCZASOWE TYPY GRACZA Z BAZY
+        moje_typy = {}
+        moj_typ_zwyciezca = ""
+        moj_typ_strzelec = ""
+
+        if uzytkownik != "Wybierz gracza...":
+            with st.spinner("Sprawdzam Twoje zapisane typy..."):
+                try:
+                    # fillna("") zapobiega błędom "NaN" jeśli pole jest puste
+                    baza_obecna = conn.read(ttl=0).fillna("")
+                    if not baza_obecna.empty:
+                        typy_gracza = baza_obecna[baza_obecna["Uzytkownik"] == uzytkownik]
+                        for _, wiersz in typy_gracza.iterrows():
+                            mecz_nazwa = wiersz["Mecz"]
+                            if mecz_nazwa == "🏆 ZWYCIĘZCA MUNDIALU":
+                                moj_typ_zwyciezca = str(wiersz["Typ_Opisowy"])
+                            elif mecz_nazwa == "⚽ KRÓL STRZELCÓW":
+                                moj_typ_strzelec = str(wiersz["Typ_Opisowy"])
+                            else:
+                                moje_typy[mecz_nazwa] = {
+                                    "gosp": int(wiersz["Typ_Gospodarz"]),
+                                    "gosc": int(wiersz["Typ_Gosc"])
+                                }
+                except Exception:
+                    pass  # W razie chwilowego błędu bazy, po prostu załadujemy 0:0
+
+        # 3. OTWIERAMY FORMULARZ
         with st.form("formularz_typowania"):
-            st.markdown("### ✍️ Wprowadź swoje typy")
-
-            # Pole do wyboru gracza (Zmień imiona na swoich znajomych!)
-            uzytkownik = st.selectbox("Kto typuje?", ["Wybierz gracza...", "Konrad", "Marcel", "Natalka"])
-
             # Słownik, w którym będziemy trzymać zebrane z formularza wyniki
             zebrane_typy = {}
 
@@ -137,31 +163,40 @@ if dane_api and "matches" in dane_api:
                 flaga_gosc = pobierz_html_flagi(gosc)
                 status = mecz["status"]
                 godzina_pl = konwertuj_na_czas_polski(mecz["utcDate"])
+                nazwa_meczu = f"{gospodarz} vs {gosc}"
 
                 st.markdown("---")
 
-                # Jeśli mecz się jeszcze nie zaczął (status SCHEDULED lub TIMED) -> Dajemy pola do wpisywania
+                # Jeśli mecz się jeszcze nie zaczął
                 if status in ["SCHEDULED", "TIMED"]:
                     st.markdown(f"### 🕒 {godzina_pl} | {flaga_gosp} **{gospodarz}** vs **{gosc}** {flaga_gosc}",
                                 unsafe_allow_html=True)
+
+                    # Ustawiamy stare typy jako domyślne w polach (jeśli ich nie ma, zostaje 0)
+                    stary_gosp = moje_typy.get(nazwa_meczu, {}).get("gosp", 0)
+                    stary_gosc = moje_typy.get(nazwa_meczu, {}).get("gosc", 0)
+
+                    if nazwa_meczu in moje_typy:
+                        st.success(
+                            f"🛡️ Masz już zapisany typ na ten mecz: **{stary_gosp} : {stary_gosc}**. Zmień liczby poniżej tylko, jeśli chcesz go nadpisać.")
 
                     # Dwie kolumny obok siebie na pola z wpisywaniem goli
                     col1, col2, col3 = st.columns([1, 1, 2])
                     with col1:
                         typ_gosp = st.number_input(f"Gole: {gospodarz}", min_value=0, max_value=20, step=1,
-                                                   key=f"gosp_{mecz['id']}")
+                                                   value=stary_gosp, key=f"gosp_{mecz['id']}")
                     with col2:
-                        typ_gosc = st.number_input(f"Gole: {gosc}", min_value=0, max_value=20, step=1,
+                        typ_gosc = st.number_input(f"Gole: {gosc}", min_value=0, max_value=20, step=1, value=stary_gosc,
                                                    key=f"gosc_{mecz['id']}")
 
                     # Zapisujemy typy do naszego słownika w pamięci
                     zebrane_typy[mecz['id']] = {
-                        "mecz_nazwa": f"{gospodarz} vs {gosc}",
+                        "mecz_nazwa": nazwa_meczu,
                         "gosp": typ_gosp,
                         "gosc": typ_gosc
                     }
 
-                # Jeśli mecz trwa (IN_PLAY, PAUSED) lub się skończył (FINISHED) -> Pokazujemy wynik i blokujemy typowanie
+                # Jeśli mecz trwa lub się skończył
                 else:
                     wynik_gosp = mecz["score"]["fullTime"]["home"]
                     wynik_gosc = mecz["score"]["fullTime"]["away"]
@@ -170,12 +205,13 @@ if dane_api and "matches" in dane_api:
                         unsafe_allow_html=True)
                     st.info(f"Mecz niedostępny do typowania. Status: {status}")
 
-            # --- NOWOŚĆ: TYPY DŁUGOTERMINOWE ---
+            # --- TYPY DŁUGOTERMINOWE ---
             st.markdown("---")
             st.markdown("### 🔮 Typy Długoterminowe")
-            st.info("Wypełnij tylko jeśli chcesz ustalić lub zmienić swój typ. Pozostaw puste, aby zachować poprzedni.")
-            typ_zwyciezca = st.text_input("Kto wygra cały Mundial? (np. Hiszpania)")
-            typ_strzelec = st.text_input("Kto zostanie królem strzelców? (np. Mbappe)")
+
+            # Formularz sam zaczyta i wklei tu Twoje poprzednie słowa!
+            typ_zwyciezca = st.text_input("Kto wygra cały Mundial?", value=moj_typ_zwyciezca)
+            typ_strzelec = st.text_input("Kto zostanie królem strzelców?", value=moj_typ_strzelec)
 
             # Przycisk wysyłający cały formularz
             wyslano = st.form_submit_button("💾 Zapisz moje typy w bazie!")
