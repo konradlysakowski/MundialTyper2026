@@ -125,7 +125,7 @@ if dane_api and "matches" in dane_api:
             st.markdown("### ✍️ Wprowadź swoje typy")
 
             # Pole do wyboru gracza (Zmień imiona na swoich znajomych!)
-            uzytkownik = st.selectbox("Kto typuje?", ["Wybierz gracza...", "Konrad", "Marcel"])
+            uzytkownik = st.selectbox("Kto typuje?", ["Wybierz gracza...", "Konrad", "Marcel", "Natalka"])
 
             # Słownik, w którym będziemy trzymać zebrane z formularza wyniki
             zebrane_typy = {}
@@ -170,6 +170,13 @@ if dane_api and "matches" in dane_api:
                         unsafe_allow_html=True)
                     st.info(f"Mecz niedostępny do typowania. Status: {status}")
 
+            # --- NOWOŚĆ: TYPY DŁUGOTERMINOWE ---
+            st.markdown("---")
+            st.markdown("### 🔮 Typy Długoterminowe")
+            st.info("Wypełnij tylko jeśli chcesz ustalić lub zmienić swój typ. Pozostaw puste, aby zachować poprzedni.")
+            typ_zwyciezca = st.text_input("Kto wygra cały Mundial? (np. Hiszpania)")
+            typ_strzelec = st.text_input("Kto zostanie królem strzelców? (np. Mbappe)")
+
             # Przycisk wysyłający cały formularz
             wyslano = st.form_submit_button("💾 Zapisz moje typy w bazie!")
 
@@ -185,34 +192,49 @@ if wyslano:
                 # 1. Odczytujemy bazę omijając cache
                 stare_dane = conn.read(ttl=0)
 
-                # 2. Przygotowujemy nowe wiersze do dopisania i listę meczów, które właśnie typujemy
                 nowe_wiersze = []
                 nazwy_meczow = []
+
+                # 1. Zgrywamy typy standardowych meczów
                 for mecz_id, dane in zebrane_typy.items():
                     nowe_wiersze.append({
-                        "Data": dzisiejsza_data,
+                        "Data": str_dzisiaj,
                         "Uzytkownik": uzytkownik,
                         "Mecz": dane["mecz_nazwa"],
                         "Typ_Gospodarz": dane["gosp"],
-                        "Typ_Gosc": dane["gosc"]
+                        "Typ_Gosc": dane["gosc"],
+                        "Typ_Opisowy": ""  # Kolumna na tekst, pusta dla meczów
                     })
                     nazwy_meczow.append(dane["mecz_nazwa"])
 
+                # 2. Zgrywamy typy długoterminowe (jeśli ktoś coś wpisał)
+                if typ_zwyciezca.strip() != "":
+                    nowe_wiersze.append({
+                        "Data": str_dzisiaj, "Uzytkownik": uzytkownik,
+                        "Mecz": "🏆 ZWYCIĘZCA MUNDIALU", "Typ_Gospodarz": -1, "Typ_Gosc": -1,
+                        "Typ_Opisowy": typ_zwyciezca.strip()
+                    })
+                    nazwy_meczow.append("🏆 ZWYCIĘZCA MUNDIALU")
+
+                if typ_strzelec.strip() != "":
+                    nowe_wiersze.append({
+                        "Data": str_dzisiaj, "Uzytkownik": uzytkownik,
+                        "Mecz": "⚽ KRÓL STRZELCÓW", "Typ_Gospodarz": -1, "Typ_Gosc": -1,
+                        "Typ_Opisowy": typ_strzelec.strip()
+                    })
+                    nazwy_meczow.append("⚽ KRÓL STRZELCÓW")
+
+                # 3. Aktualizacja bazy
                 nowy_df = pd.DataFrame(nowe_wiersze)
 
-                # 3. LOGIKA USUWANIA / NADPISYWANIA
                 if not stare_dane.empty:
-                    # Magia biblioteki Pandas: Zostawiamy w tabeli wszystkie wiersze OPRÓCZ tych,
-                    # gdzie zgadza się obecny "Uzytkownik" i "Mecz" jest na liście nowo wytypowanych.
                     maska = ~((stare_dane["Uzytkownik"] == uzytkownik) & (stare_dane["Mecz"].isin(nazwy_meczow)))
                     stare_dane = stare_dane[maska]
 
-                # 4. Łączymy "oczyszczone" stare dane z nowymi
                 zaktualizowana_baza = pd.concat([stare_dane, nowy_df], ignore_index=True)
-
-                # 5. Wysyłamy do Google
                 conn.update(data=zaktualizowana_baza)
-                st.success("✅ Typy zapisane! (Jeśli miałeś już tu typ, został pomyślnie zaktualizowany).")
+
+                st.success("✅ Typy zapisane! (Zwykłe i długoterminowe zaktualizowane).")
             except Exception as e:
                 st.error(f"Wystąpił błąd podczas zapisu: {e}")
 
@@ -294,3 +316,34 @@ with st.spinner("Przeliczam punkty..."):
 
     except Exception as e:
         st.warning(f"Nie udało się załadować rankingu. Błąd: {e}")
+
+# --- 9. TYPY DŁUGOTERMINOWE (PODGLĄD) ---
+st.markdown("---")
+st.markdown("## 🔮 Kto w kogo wierzy? (Typy Długoterminowe)")
+
+with st.spinner("Ładuję długoterminowe typy..."):
+    try:
+        # Odczytujemy najnowszą bazę
+        baza_dlugo = conn.read(ttl=0)
+
+        # Sprawdzamy czy nowa kolumna z tekstem już istnieje w Google Sheets
+        if "Typ_Opisowy" in baza_dlugo.columns:
+            # Filtrujemy tylko nasze "specjalne" wiersze
+            maska = baza_dlugo["Mecz"].isin(["🏆 ZWYCIĘZCA MUNDIALU", "⚽ KRÓL STRZELCÓW"])
+            typy_dlugo = baza_dlugo[maska]
+
+            if not typy_dlugo.empty:
+                # Oczyszczamy stare, zdublowane typy
+                typy_dlugo = typy_dlugo.drop_duplicates(subset=['Uzytkownik', 'Mecz'], keep='last')
+
+                # Budujemy piękną, zgrabną tabelkę
+                tabela_dlugo = typy_dlugo.pivot(index="Uzytkownik", columns="Mecz", values="Typ_Opisowy").reset_index()
+                tabela_dlugo = tabela_dlugo.rename(columns={"Uzytkownik": "Gracz"}).fillna("-")
+
+                st.table(tabela_dlugo)
+            else:
+                st.info("Nikt jeszcze nie podał typów długoterminowych. Bądź pierwszy!")
+        else:
+            st.info("Nikt jeszcze nie podał typów długoterminowych. Bądź pierwszy!")
+    except Exception as e:
+        st.warning(f"Nie można wyświetlić typów długoterminowych: {e}")
